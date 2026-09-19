@@ -49,3 +49,7 @@ def chunk_python_file(file_path: str, content: str) -> list[Chunk]:
                     chunks.append(make_chunk(child, "method", method_name))
 
     return chunks
+def enrich_chunk_text(chunk: Chunk) -> str:
+    """Add contextual info before the raw code, to help retrieval on short/terse chunks."""
+    header = f"# {chunk.chunk_type}: {chunk.name}\n"
+    return header + chunk.content
