@@ -5,8 +5,9 @@ from rank_bm25 import BM25Okapi
 class VectorStore:
     """Wraps ChromaDB — stores chunk text + embeddings for semantic search."""
 
-    def __init__(self, collection_name: str = "codebase_chunks", persist_path: str = "./chroma_db"):
-        self.client = chromadb.PersistentClient(path=persist_path)
+    def __init__(self, collection_name: str = "codebase_chunks", persist_path: str = None):
+        from src.config import settings
+        self.client = chromadb.PersistentClient(path=persist_path or settings.chroma_persist_path)
         self.collection = self.client.get_or_create_collection(name=collection_name)
 
     def add_chunks(self, ids: list[str], texts: list[str], embeddings: list[list[float]], metadatas: list[dict]):
