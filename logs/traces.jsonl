@@ -1,0 +1,1 @@
+{"query": "how do I make an HTTP request", "stages": {"embed_query": 262.31, "hybrid_search": 66.43, "rerank": 1477.04, "generation": 1345.09}, "total_latency_ms": 3151.02, "retrieved_chunk_ids": ["httpx\\_client.py:1001", "httpx\\_client.py:494", "httpx\\_client.py:1717", "httpx\\_client.py:299", "httpx\\_client.py:771"], "answer_length": 1934}
