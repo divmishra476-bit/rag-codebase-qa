@@ -1,11 +1,26 @@
 # src/observability/tracer.py
 import time
+import os
 import logging
 import json
 from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger("rag_pipeline")
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger.setLevel(logging.INFO)
+
+# creaye logs/ folder if there are none 
+os.makedirs("logs", exist_ok=True)
+
+# Show on Console, and save in file
+file_handler = logging.FileHandler("logs/traces.jsonl")
+console_handler = logging.StreamHandler()
+
+formatter = logging.Formatter("%(message)s")
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 
 @dataclass
