@@ -155,4 +155,38 @@ Status
 
 This project is actively being developed and evaluated.
 
-Future improvements will focus on retrieval quality, evaluation coverage, latency, and production deployment.
+
+
+## Key engineering decisions
+
+- **AST-based code chunking** — splits Python files at real function/class/method boundaries (not fixed character counts), preserving complete, meaningful code units with accurate line numbers for citation.
+- **Hybrid search (vector + BM25), merged with Reciprocal Rank Fusion** — semantic search alone misses exact keyword matches; BM25 alone misses conceptual matches. RRF combines both ranking signals without one method silently overriding the other.
+- **Cross-encoder re-ranking** — refines the top hybrid candidates with a model trained specifically for query-document relevance.
+- **Config-driven, no hardcoded secrets** — all models, retrieval parameters, and API keys live in `.env` / `src/config.py` via `pydantic-settings`.
+- **Structured request tracing** — every query logs per-stage latency, retrieved chunk IDs, and answer length as JSON for real debugging.
+- **No orchestration framework (LangChain/CrewAI)** — every component is implemented directly, so every design decision is one I can explain and defend.
+
+## Documented findings from evaluation
+
+1. **Re-ranker bias toward private methods** — the cross-encoder sometimes ranks internal/private methods (`_send_single_request`) above the correct public API method (`Client.request`). Mitigated by passing the top 5 candidates to the LLM rather than only the top 1 — the LLM correctly identified the right method despite imperfect ranking.
+2. **Short-chunk retrieval weakness** — terse code (e.g., 2-line property getters/setters) carries weak semantic signal. Attempted a naive chunk-enrichment fix (prepending a generic header); this **reduced** recall from 83% to 50% by diluting previously-working chunks — reverted, and documented as a case where a plausible fix made things measurably worse.
+
+## Setup
+
+```bash
+git clone https://github.com/divmishra476-bit/rag-codebase-qa.git
+cd rag-codebase-qa
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+echo "GROQ_API_KEY=your_key_here" > .env
+git clone https://github.com/encode/httpx.git test-repo
+pytest tests/ -v
+```
+
+## Known limitations / future work
+
+- Currently supports Python codebases only — chunking relies on Python's `ast` module.
+- Evaluation set is currently 6 questions — a larger set (30-50) would give more statistically meaningful numbers.
+- Not yet deployed as a live API (FastAPI layer in progress).
+- Agentic retrieval (function-calling to decide *when* to retrieve) considered as a stretch goal for a follow-up project.
