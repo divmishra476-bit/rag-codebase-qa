@@ -190,3 +190,4 @@ pytest tests/ -v
 - Evaluation set is currently 6 questions — a larger set (30-50) would give more statistically meaningful numbers.
 - Not yet deployed as a live API (FastAPI layer in progress).
 - Agentic retrieval (function-calling to decide *when* to retrieve) considered as a stretch goal for a follow-up project.
+- API currently indexes a single module (httpx/_client.py); full-repo indexing is the next step.
