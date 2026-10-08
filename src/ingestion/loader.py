@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+SKIP_DIRS = {"test", "tests", "venv", "env", "node_modules", "site-packages", "build", "dist"}
 
 @dataclass
 class LoadedFile:
@@ -25,10 +26,12 @@ def load_repo_files(repo_path: str) -> list[LoadedFile]:
     for path in repo.rglob("*"):
         if not path.is_file():
             continue
-        if any(part.startswith(".") for part in path.parts):
+        rel = path.relative_to(repo)
+        if any(part.startswith(".") for part in rel.parts):
             continue
-        if "test" in path.parts or "tests" in path.parts:
+        if any(part in SKIP_DIRS for part in rel.parts):
             continue
+        
 
         suffix = path.suffix.lower()
         if suffix in code_extensions:
