@@ -11,7 +11,7 @@ def build_prompt(query: str, chunks: list[dict]) -> str:
     """
     chunks: list of dicts, each with 'id', 'text', and 'meta'
     (file_path, name, chunk_type, start_line, end_line)
-    Returns the full user-turn prompt to send to Claude.
+    Returns the full user-turn prompt to send to the LLM.
     """
     context_blocks = []
 
