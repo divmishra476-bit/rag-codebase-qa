@@ -23,6 +23,10 @@ class VectorStore:
             query_embeddings=[query_embedding],
             n_results=top_k,
         )
+    def get_all(self):
+        data = self.collection.get(include=["documents", "metadatas"])
+        return data["ids"], data["documents"], data["metadatas"]
+    
 class KeywordStore:
     """Wraps BM25 — stores tokenized chunk text for keyword search."""
 

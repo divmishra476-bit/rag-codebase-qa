@@ -3,8 +3,6 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.ingestion.loader import load_repo_files
-from src.ingestion.chunker import chunk_python_file
 from src.ingestion.embedder import Embedder
 from src.ingestion.storage import VectorStore, KeywordStore
 from src.retrieval.reranker import Reranker
@@ -14,27 +12,17 @@ from src.observability.tracer import Tracer
 
 app = FastAPI(title="Codebase Q&A RAG API")
 
-# Build the index once, when the server starts
-files = load_repo_files("test-repo")
-code_files = [f for f in files if f.file_type == "code"]
-target = next(f for f in code_files if "_client" in f.path)
-chunks = chunk_python_file(target.path, target.content)
+# Load the saved index (built once with: python -m src.ingestion.build_index test-repo)
+vector_store = VectorStore()
+ids, texts, metadatas = vector_store.get_all()
+if not ids:
+    raise RuntimeError("Index is empty. Run: python -m src.ingestion.build_index test-repo")
 
-texts = [c.content for c in chunks]
-ids = [f"{c.file_path}:{c.start_line}" for c in chunks]
-metadatas = [
-    {"file_path": c.file_path, "chunk_type": c.chunk_type, "name": c.name,
-     "start_line": c.start_line, "end_line": c.end_line}
-    for c in chunks
-]
 id_to_text = dict(zip(ids, texts))
 id_to_meta = dict(zip(ids, metadatas))
+keyword_store = KeywordStore(texts, ids)
 
 embedder = Embedder()
-vectors = embedder.embed_texts(texts)
-vector_store = VectorStore()
-vector_store.add_chunks(ids, texts, vectors, metadatas)
-keyword_store = KeywordStore(texts, ids)
 reranker = Reranker()
 generator = Generator()
 
