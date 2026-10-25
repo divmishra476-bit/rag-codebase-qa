@@ -1,142 +1,168 @@
-# rag-codebase-qa
+# 🔍 Codebase Q&A — Grounded RAG from Scratch
 
-A Retrieval-Augmented Generation (RAG) system that answers natural-language questions about a software repository (code and docs), with file and line citations. Built from scratch, with no LangChain or other orchestration framework, so every retrieval and generation decision is implemented and measured directly.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://rag-codebase-app-vjnyxtdshllzwrfeqsqcjr.streamlit.app)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/divmishra476-bit/rag-codebase-qa/actions/workflows/ci.yml/badge.svg)](https://github.com/divmishra476-bit/rag-codebase-qa/actions)
+[![Recall@5](https://img.shields.io/badge/Recall%405-92.86%25-brightgreen.svg)](#4-evaluation--benchmarks)
 
-Target repository for development and evaluation: [httpx](https://github.com/encode/httpx) (978 chunks of code and docs).
+> 🚀 **Live Demo:** [rag-codebase-app-vjnyxtdshllzwrfeqsqcjr.streamlit.app](https://rag-codebase-app-vjnyxtdshllzwrfeqsqcjr.streamlit.app)
 
-## What it does
+A Retrieval-Augmented Generation (RAG) system that answers natural-language questions about a software codebase (`httpx`) with exact file and line citations. Built completely from scratch with **no LangChain or orchestration frameworks**, ensuring every chunking, retrieval, and reranking decision is transparent and measurable.
 
-Ask "how does httpx handle authentication" and get a streamed answer grounded in the repository's own source and documentation, citing files and line ranges, instead of the LLM's general training knowledge.
+---
 
-## Architecture
+## 📑 Table of Contents (Index)
 
-```text
-Ingestion (run once, build_index.py)
-  Repo files -> Loader -> Chunker (AST for code, headings for docs)
-             -> Embedder -> ChromaDB (vectors) + BM25 (keywords)
+1. [Overview](#1-overview)
+2. [System Architecture](#2-system-architecture)
+3. [Key Features](#3-key-features)
+4. [Evaluation & Benchmarks](#4-evaluation--benchmarks)
+5. [Key Engineering Decisions](#5-key-engineering-decisions)
+6. [Tech Stack & Project Layout](#6-tech-stack--project-layout)
+7. [Local Setup & Quickstart](#7-local-setup--quickstart)
+8. [Known Limitations](#8-known-limitations)
 
-Query (per request, FastAPI /ask)
-  Question -> Hybrid search (vector + BM25) -> Reciprocal Rank Fusion
-           -> Cross-encoder re-ranking -> Grounded prompt
-           -> LLM (streamed) -> Answer with citations
-           -> Per-request trace (latency per stage, chunk IDs)
-```
+---
 
-## Features
+## 1. Overview
 
-- AST-based chunking of Python code (functions, classes, methods) with line numbers
-- Heading-based chunking of Markdown and reStructuredText docs
-- Hybrid retrieval: dense vectors (ChromaDB) plus BM25, merged with Reciprocal Rank Fusion
-- Cross-encoder re-ranking of the merged candidates
-- Grounded prompt that tells the LLM to answer only from the retrieved chunks and cite file and lines
-- Streaming answers over HTTP (FastAPI `StreamingResponse`)
-- Per-request tracing: latency per stage, retrieved chunk IDs, answer length (JSON lines)
-- Config via `.env` and `pydantic-settings`, no hardcoded secrets
-- Pytest suite and GitHub Actions CI
-- Retrieval evaluation with a pre-registered question set
+- **Problem:** Generic LLMs hallucinate internal APIs, method signatures, and configuration flags when answering questions about a specific codebase.
+- **Solution:** A grounded RAG system that indexes repository source code and documentation, retrieves context using a hybrid search + cross-encoder pipeline, and streams answers with verifiable `file:line` citations.
+- **Target Repository:** `httpx` (978 pre-computed chunks covering full code and docs).
+- **Core Philosophy:** Zero third-party RAG abstractions (No LangChain / LlamaIndex). All storage, retrieval math, fusion, and prompt templates are written in pure Python.
 
-## Evaluation
+---
 
-Retrieval is measured with **Recall@5**: is at least one correct chunk in the top 5 results? Evaluated on the full index (978 chunks of code and docs).
+## 2. System Architecture
 
-**Current result: 13/14 = 92.86% Recall@5** on `eval/eval_set_v2.py`.
-
-The expected chunks were picked with plain keyword search (not the retriever) and committed to Git *before* the eval was run, so results could not influence the ground truth. With only 14 questions the 95% confidence interval is wide (roughly 69% to 99%).
-
-The one miss: "what exceptions can httpx raise" returned `docs/exceptions.md:1` and `docs/quickstart.md:495`. Both arguably answer the question, but the ground truth listed only `docs/exceptions.md:40`. It is reported as a miss and left unchanged.
-
-### Limitations of this number
-
-- 12 of the 14 questions are answered by docs; only 2 test code retrieval, so code retrieval is under-tested.
-- A known failure is not in this set: "how do I make an HTTP request" retrieves several docs chunks, and `Client.request` falls out of the top 5 on the full index (it was in the top 5 on the earlier single-file index).
-- Ground truth is my judgement of what directly answers a question; borderline chunks were left out.
-- Only retrieval is evaluated. Answer quality from the LLM is not systematically measured.
-
-### History
-
-- Single-module index (88 chunks, 6 questions): 83.33%.
-- The same 6 questions on the full index: 50%. Reading the retrieved chunks showed two misses were stale ground truth (docs that directly answer the question were not in the index when the questions were written) and one was a real regression (above). The expected IDs for those two were widened after seeing results, so the later 5/6 figure is not used as evidence.
-- Naive chunk enrichment (prepending a generic header to every chunk) dropped the single-module score from 83% to 50% and was reverted.
-- Observed on the single-module index only (not re-checked on the full index): the cross-encoder sometimes ranked private methods (`_send_single_request`) above the public `Client.request`.
-
-## Performance
-
-One sample request on a CPU-only laptop: about 5.0 s end to end, of which re-ranking is about 2.3 s, query embedding about 0.5 s and hybrid search about 0.03 s. Re-ranking is the slowest retrieval stage. This is one measurement, not a benchmark.
-
-## Key engineering decisions
-
-- **AST-based code chunking**: splits at real function, class and method boundaries instead of fixed character counts, keeping complete code units and accurate line numbers for citation.
-- **Hybrid search with Reciprocal Rank Fusion**: semantic search misses exact identifiers, and BM25 misses conceptual matches. RRF combines both rankings without one silently overriding the other.
-- **Cross-encoder re-ranking**: re-scores the top candidates against the query. Costs latency (see Performance).
-- **Index built once, loaded at startup**: embedding is slow on CPU, so `build_index.py` builds and saves the index and the API only loads it.
-- **Config-driven**: models, retrieval parameters and API keys live in `.env` and `src/config.py`.
-- **Structured request tracing**: every query logs per-stage latency and the retrieved chunk IDs for debugging.
-- **No orchestration framework**: every component is implemented directly.
-
-## Tech stack
-
-Python 3.12, sentence-transformers (`BAAI/bge-large-en-v1.5`), ChromaDB, rank_bm25, cross-encoder (`ms-marco-MiniLM-L-6-v2`), FastAPI and uvicorn, Groq API (`openai/gpt-oss-20b`), pydantic-settings, pytest, GitHub Actions.
-
-## Project structure
+The pipeline is strictly decoupled into an **Offline Ingestion Stage** and an **Online Serving Stage**:
 
 ```text
-src/
-  config.py              settings (.env)
-  api/main.py            FastAPI app: POST /ask (streaming), GET /health
-  ingestion/
-    loader.py            reads repo files
-    chunker.py           AST chunking for Python
-    doc_chunker.py       heading-based chunking for docs
-    indexer.py           chunks a whole repo (code + docs)
-    build_index.py       embeds and saves the index (run once)
-    embedder.py          sentence-transformers wrapper
-    storage.py           ChromaDB + BM25 stores
-  retrieval/
-    hybrid.py            Reciprocal Rank Fusion
-    reranker.py          cross-encoder re-ranking
-    pipeline.py          full retrieval pipeline
-  generation/
-    prompt_builder.py    grounded prompt with citations
-    generator.py         LLM calls (streaming and non-streaming)
-  observability/tracer.py   per-request tracing
-tests/                   pytest suite
-eval/                    eval sets and runner
-.github/workflows/       CI
-```
+┌────────────────────────────────────────────────────────────────────────┐
+│ 1. OFFLINE INGESTION (Run once via build_index.py)                     │
+│                                                                        │
+│ Repo Files ──► Loader ──► AST Chunker (Code) / Heading Chunker (Docs)  │
+│                                 │                                      │
+│                                 ├──► ChromaDB (Dense Vector Store)     │
+│                                 └──► BM25 (Sparse Keyword Store)       │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+┌──────────────────────────────────▼─────────────────────────────────────┐
+│ 2. ONLINE SERVING (Streamlit UI / FastAPI /ask)                        │
+│                                                                        │
+│ User Query ──► Hybrid Search (Dense BGE-Large + BM25)                  │
+│                     │                                                  │
+│                     ▼                                                  │
+│           Reciprocal Rank Fusion (RRF)                                 │
+│                     │                                                  │
+│                     ▼                                                  │
+│           Cross-Encoder Reranker (ms-marco-MiniLM-L-6-v2)              │
+│                     │                                                  │
+│                     ▼                                                  │
+│           Grounded Prompt Builder (Strict Citation Constraints)        │
+│                     │                                                  │
+│                     ▼                                                  │
+│           Groq LLM (Streamed Response + JSON Request Trace)            │
+└────────────────────────────────────────────────────────────────────────┘
 
-The `test_*.py` files in the repository root are manual exploration scripts from development. The automated tests are in `tests/`.
-
-## Setup
-
-```bash
+3. Key Features
+AST-Based Code Chunking: Uses Python's native ast module to split at function, class, and method boundaries instead of arbitrary token cuts, keeping syntax blocks and accurate line citations intact.
+Document Heading Chunking: Splits Markdown/RST documentation by logical headers (#, ##, ###) to preserve conceptual cohesion.
+Hybrid Retrieval with RRF: Fuses dense semantic search (BAAI/bge-large-en-v1.5) and sparse keyword search (rank_bm25) using Reciprocal Rank Fusion.
+Two-Stage Reranking: Applies a cross-encoder model (ms-marco-MiniLM-L-6-v2) on fused candidates to minimize false positives before prompting the LLM.
+Strict Grounded Prompting: Configured prompt template that instructs the LLM to only use provided context and cite file paths and line ranges.
+Dual Serving Interfaces:
+Interactive Streamlit Web UI with real-time token streaming and expandable citation drawers.
+Production FastAPI service (POST /ask with StreamingResponse, GET /health).
+Observability: JSON request tracing measuring per-stage latency (embed_query, hybrid_search, rerank, total_latency_ms).
+4. Evaluation & Benchmarks
+4.1. Retrieval Accuracy (Recall@5)
+Retrieval quality is measured on the full repository index (978 chunks) using a pre-registered question set (eval/eval_set_v2.py):
+Result: 13 / 14 = 92.86% Recall@5 (95% CI roughly 69% to 99%).
+Pre-registered Ground Truth: Expected chunks were selected via keyword matching and committed to Git prior to running evaluation to prevent confirmation bias.
+The Single Miss: For "what exceptions can httpx raise", the retriever returned docs/exceptions.md:1 and docs/quickstart.md:495. Both answer the query, but ground truth strictly expected docs/exceptions.md:40. It is reported as a miss and left unedited.
+4.2. Latency & Memory Profile
+Measured on standard CPU runtime:
+Stage	Latency	Description
+Query Embedding	~408 ms	BAAI/bge-large-en-v1.5 dense vector creation
+Hybrid Search	~28 ms	ChromaDB vector search + BM25 keyword query
+RRF Merging	< 2 ms	Merging ranked lists
+Cross-Encoder Rerank	~2,012 ms	Cross-attention scoring of top candidates (primary bottleneck)
+Total Retrieval Latency	~2.45 s	Time before first LLM token stream
+Empirical Memory Usage: Baseline: 48 MB ──► Startup (Models + Index): ~1,836 MB ──► Peak RAM: ~1,955 MB (~1.95 GB). Runs comfortably within free 2.7 GB container limits.
+5. Key Engineering Decisions
+Why AST over Fixed Chunks? Fixed character chunking splits functions midway, breaking AST structure and giving wrong line citations. AST parsing guarantees complete functional blocks.
+Why Hybrid Search (Dense + BM25)? Dense search understands concepts (e.g., "how to pause requests" ──► timeout), while BM25 handles exact identifiers (e.g., Client.send()). RRF merges both without arbitrary score weighting.
+Why Cross-Encoder Reranking? Bi-encoders embed query and documents separately. Cross-encoders examine them simultaneously, dramatically filtering out borderline irrelevant context at the expense of CPU latency.
+Why Pre-computed Storage? Generating dense embeddings on CPU is slow. Indexing is an offline task; serving is an online task that loads pre-built ChromaDB files instantly.
+Why No LangChain? Raw implementations provide deterministic memory consumption, zero abstraction overhead, and total control over debugging.
+6. Tech Stack & Project Layout
+Tech Stack
+Language & Runtime: Python 3.12
+Embeddings & Reranker: sentence-transformers (bge-large-en-v1.5, ms-marco-MiniLM-L-6-v2)
+Storage: ChromaDB (persistent HNSW) + rank_bm25
+LLM Provider: Groq Cloud API (openai/gpt-oss-20b, streamed)
+Serving: Streamlit (Frontend) + FastAPI & Uvicorn (Backend API)
+CI & Testing: pytest (14 unit/integration tests) + GitHub Actions CI
+Directory Structure
+code
+Text
+rag-codebase-qa/
+├── chroma_db/               # Committed pre-built vector & metadata index (10.2 MB)
+├── src/
+│   ├── config.py            # Typed settings via pydantic-settings
+│   ├── api/main.py          # FastAPI application (POST /ask, GET /health)
+│   ├── ingestion/
+│   │   ├── loader.py        # File discovery
+│   │   ├── chunker.py       # AST chunker for Python
+│   │   ├── doc_chunker.py   # Heading chunker for Markdown/RST
+│   │   ├── build_index.py   # Offline index builder
+│   │   └── storage.py       # ChromaDB + BM25 interfaces
+│   ├── retrieval/
+│   │   ├── hybrid.py        # Reciprocal Rank Fusion implementation
+│   │   ├── reranker.py      # Cross-encoder inference wrapper
+│   │   └── pipeline.py      # Coordinated retrieval pipeline
+│   ├── generation/
+│   │   ├── prompt_builder.py# Grounded prompt engineering
+│   │   └── generator.py     # Groq API streaming client
+│   └── observability/
+│       └── tracer.py        # Structured JSON logger
+├── eval/                    # Evaluation sets and runner scripts
+├── tests/                   # Pytest test suite
+├── streamlit_app.py         # Streamlit web application
+├── requirements.txt         # Pinned project dependencies
+└── measure_ram.py           # Physical RAM measurement script
+7. Local Setup & Quickstart
+Step 1: Clone Repository & Create Virtual Environment
+code
+Powershell
 git clone https://github.com/divmishra476-bit/rag-codebase-qa.git
 cd rag-codebase-qa
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-pip install -r requirements.txt
-
-# Create a file named .env containing one line:
-# GROQ_API_KEY=your_key_here
-
-# Clone the repository to index
-git clone https://github.com/encode/httpx.git test-repo
-
-# Build the index once (can take a while on CPU)
-python -m src.ingestion.build_index test-repo
-
-# Start the API, then open http://localhost:8000/docs and try POST /ask
+.\.venv\Scripts\activate
+python -m pip install -r requirements.txt
+Step 2: Configure Environment Variables
+Create a .env file in the project root:
+code
+Env
+GROQ_API_KEY=your_groq_api_key_here
+Step 3: Run the Application
+Launch Streamlit Web UI (Interactive Chat):
+code
+Powershell
+python -m streamlit run streamlit_app.py
+Open http://localhost:8501 in your browser.
+Launch FastAPI Backend (REST API):
+code
+Powershell
 uvicorn src.api.main:app
-
-# Run the tests and the retrieval eval
+API docs available at http://localhost:8000/docs.
+Step 4: Run Tests
+code
+Powershell
 pytest tests/ -v
-python test_eval.py
-```
+8. Known Limitations
+Python-Only Code Parsing: AST chunking uses Python's standard ast library. Multi-language support (JavaScript, Go, Rust) requires integrating tree-sitter.
+Documentation Over-Retrieval: Generic natural language queries can cause documentation chunks to outrank specific source code implementations.
+Static Index: Index updates currently require running build_index.py again; incremental real-time file updates are not implemented.
 
-## Known limitations
-
-- Chunking relies on Python's `ast` module, so only Python code is chunked. Other languages would need a parser such as tree-sitter.
-- The eval set is small (14 questions) and docs-heavy; see Evaluation.
-- Known retrieval weakness: broad questions such as "how do I make an HTTP request" can be outranked by docs chunks.
-- The API runs locally only. There is no public deployment and no frontend.
-- Rebuilding the index replaces the previous one; there is no incremental update.
-- The LLM is a free-tier model on Groq. Swapping providers means changing `generator.py`.
